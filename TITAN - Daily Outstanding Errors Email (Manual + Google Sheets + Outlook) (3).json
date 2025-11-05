@@ -1,0 +1,299 @@
+{
+  "name": "TITAN - Daily Outstanding Errors Email (Manual + Google Sheets + Outlook)",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "81227a37-7894-4221-b1fb-3566a78e68ef",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -256,
+        128
+      ]
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1mLSP7c6vLyZcigSn0NyVTGCYl1QpEoLHAUySud33jx0",
+          "mode": "list",
+          "cachedResultName": "Error_Report",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1mLSP7c6vLyZcigSn0NyVTGCYl1QpEoLHAUySud33jx0/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "TITAN_Errors",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "e5396d75-1292-404a-9763-063dff39375b",
+      "name": "Read TITAN_Errors (Google Sheets)1",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.2,
+      "position": [
+        -80,
+        352
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "vhIzlpaL8oxHKJtR",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1mLSP7c6vLyZcigSn0NyVTGCYl1QpEoLHAUySud33jx0",
+          "mode": "list",
+          "cachedResultName": "Error_Report",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1mLSP7c6vLyZcigSn0NyVTGCYl1QpEoLHAUySud33jx0/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Error_Map",
+          "mode": "name"
+        },
+        "combineFilters": "AND",
+        "options": {}
+      },
+      "id": "01203611-4125-45f8-8ed4-47974f0bf1f2",
+      "name": "Read Error_Map (Google Sheets)1",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.2,
+      "position": [
+        304,
+        352
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "vhIzlpaL8oxHKJtR",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "subject": "Outstanding TITAN Errors - {{$now}}",
+        "bodyContent": "={{$json.html}}\n",
+        "toRecipients": "Zander.wepener@goglobal.group",
+        "additionalFields": {
+          "bodyContentType": "html"
+        }
+      },
+      "id": "faa7f650-0054-4a7b-93d2-dacd802e54ce",
+      "name": "Send Email (Outlook 365)1",
+      "type": "n8n-nodes-base.microsoftOutlook",
+      "typeVersion": 1,
+      "position": [
+        1472,
+        368
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "microsoftOutlookOAuth2Api": {
+          "id": "GK12kM68h7ZFB37M",
+          "name": "Microsoft Outlook account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const rows = $input.all();\nreturn rows.filter(r => {\n  const s = String(r.json.Status ?? '').trim().toLowerCase();\n  return !s || !['resolved','closed','done'].includes(s);\n});\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        656,
+        352
+      ],
+      "id": "1a613444-ddc3-40a7-a520-5d4296973bbb",
+      "name": "Filter Outstanding2"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Pull stashed TITAN rows + current Error_Map rows\nconst g = $getWorkflowStaticData('global');\nconst errors  = g.errors || [];                       // from earlier stash\nconst mapRows = $input.all().map(i => i.json);        // current node input\n\n// Build dictionary (lowercased). Priority optional.\nconst dict = mapRows\n  .map(r => ({\n    priority: Number(r.Priority ?? 9999),\n    pattern:  String(r.Pattern || '').toLowerCase().trim(),\n    simplified: String(r.SimplifiedError || '').trim(),\n  }))\n  .filter(d => d.pattern);\n\n// Map each error row → add SimplifiedError\nconst out = errors.map(r => {\n  const msg = String(r.RawError || '').toLowerCase();\n  const hits = dict.filter(d => msg.includes(d.pattern));\n  if (!hits.length) return { json: { ...r, SimplifiedError: 'Unmapped' } };\n  // pick lowest priority, then longest pattern\n  hits.sort((a,b) => (a.priority - b.priority) || (b.pattern.length - a.pattern.length));\n  return { json: { ...r, SimplifiedError: hits[0].simplified } };\n});\n\nreturn out;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        352
+      ],
+      "id": "bd51ac99-473a-4ddf-97e6-78a8f5b19b8a",
+      "name": "Map SimplifierError1"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Group incoming rows by ContainerID and build:\n// - RawErrorHTML: distinct list of raw errors\n// - SolutionHTML: list of \"Line X: SimplifiedError\" entries\n\nconst rows = $input.all().map(i => i.json);\n\n// 1) Group by ContainerID\nconst byContainer = new Map();\nfor (const r of rows) {\n  const key = (r.ContainerID ?? '(missing)').toString();\n  if (!byContainer.has(key)) byContainer.set(key, []);\n  byContainer.get(key).push(r);\n}\n\n// 2) For each container, produce one output item\nconst out = [];\nfor (const [containerID, list] of byContainer.entries()) {\n  // Sort lines numerically when possible\n  const sorted = list.slice().sort((a, b) => {\n    const la = Number(a.LineNo ?? Infinity);\n    const lb = Number(b.LineNo ?? Infinity);\n    return la - lb;\n  });\n\n  // Distinct RawError list\n  const rawDistinct = [...new Set(sorted.map(r => (r.RawError ?? '').toString().trim()).filter(Boolean))];\n\n  // Build HTML bullets\n  const rawHTML = rawDistinct.length\n    ? `<ul>${rawDistinct.map(x => `<li>${x}</li>`).join('')}</ul>`\n    : '(none)';\n\n  const pairs = sorted.map(r => {\n    const ln = (r.LineNo !== undefined && r.LineNo !== null && r.LineNo !== '') ? `Line ${r.LineNo}` : 'Line ?';\n    const se = (r.SimplifiedError ?? 'Unmapped').toString();\n    return `${ln}: ${se}`;\n  });\n\n  const solutionHTML = pairs.length\n    ? `<ul>${pairs.map(p => `<li>${p}</li>`).join('')}</ul>`\n    : '(none)';\n\n  out.push({\n    json: {\n      ContainerID: containerID,\n      RawErrorHTML: rawHTML,\n      SolutionHTML: solutionHTML,\n      // Optional plain-text fields if you ever need non-HTML:\n      RawErrorList: rawDistinct,\n      SolutionList: pairs\n    }\n  });\n}\n\nreturn out;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        832,
+        352
+      ],
+      "id": "b192383b-971e-4775-9b40-9f49c36cbaba",
+      "name": "Group & Build Rows2"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Save TITAN_Errors rows into workflow-global storage for this run.\nconst g = $getWorkflowStaticData('global');\ng.errors = $input.all().map(i => i.json);\n\n// Pass something forward (next read will overwrite anyway)\nreturn $input.all();\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        112,
+        352
+      ],
+      "id": "19aad1df-8c7d-4ada-8df1-c60170fc2834",
+      "name": "Stash1"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build an Outlook-safe HTML email body (no markdown).\nconst rows = $input.all().map(i => i.json);\n\n// Basic HTML escape\nconst esc = (s) =>\n  String(s ?? \"\")\n    .replace(/&/g, \"&amp;\")\n    .replace(/</g, \"&lt;\")\n    .replace(/>/g, \"&gt;\")\n    .replace(/\"/g, \"&quot;\")\n    .replace(/'/g, \"&#39;\");\n\n// Detect an existing \"Line N:\" prefix (case-insensitive, allows spaces)\nconst hasLinePrefix = (s) => /^\\s*(?:Line|Ln)\\s*\\d+\\s*:/.test(String(s));\n\n// Render an array as a UL, adding \"Line N:\" only if missing.\n// Supports either strings or objects like { lineNo, text }.\nconst toListHtmlWithLines = (arr) => {\n  if (!Array.isArray(arr) || !arr.length) return \"\";\n  const items = arr.map((v, i) => {\n    if (v && typeof v === \"object\" && (\"text\" in v || \"lineNo\" in v)) {\n      const n = v.lineNo ?? (i + 1);\n      const t = esc(v.text ?? \"\");\n      return `Line ${n}: ${t}`;\n    } else {\n      const s = String(v ?? \"\");\n      return hasLinePrefix(s) ? esc(s) : `Line ${i + 1}: ${esc(s)}`;\n    }\n  });\n  return `<ul style=\"margin:0; padding-left:18px;\">${items.map(li => `<li>${li}</li>`).join(\"\")}</ul>`;\n};\n\nconst makeRow = (r) => {\n  const rawCell = Array.isArray(r.RawErrorList)\n    ? toListHtmlWithLines(r.RawErrorList)\n    : (r.RawErrorHTML || \"\");\n\n  const solCell = Array.isArray(r.SolutionList)\n    ? toListHtmlWithLines(r.SolutionList) // <-- now safe; no double \"Line\"\n    : (r.SolutionHTML || \"\");\n\n  return `\n    <tr>\n      <td valign=\"top\" style=\"font-family:Arial, sans-serif; font-size:14px;\">${esc(r.ContainerID || \"\")}</td>\n      <td valign=\"top\" style=\"font-family:Arial, sans-serif; font-size:14px;\">${rawCell}</td>\n      <td valign=\"top\" style=\"font-family:Arial, sans-serif; font-size:14px;\">${solCell}</td>\n    </tr>\n  `;\n};\n\nconst table = `\n<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"border-collapse:collapse;\">\n  <tr>\n    <td style=\"font-family:Arial, sans-serif; font-size:18px; font-weight:bold; padding:0 0 12px 0;\">\n      Outstanding TITAN Errors\n    </td>\n  </tr>\n  <tr>\n    <td>\n      <table width=\"100%\" cellpadding=\"8\" cellspacing=\"0\" border=\"1\" style=\"border-collapse:collapse; table-layout:fixed;\">\n        <thead>\n          <tr style=\"background:#f2f2f2;\">\n            <th align=\"left\" valign=\"top\" style=\"font-family:Arial, sans-serif; font-size:14px;\">ContainerID</th>\n            <th align=\"left\" valign=\"top\" style=\"font-family:Arial, sans-serif; font-size:14px;\">RawError (LineNo : Description)</th>\n            <th align=\"left\" valign=\"top\" style=\"font-family:Arial, sans-serif; font-size:14px;\">Solution (LineNo : SimplifiedError)</th>\n          </tr>\n        </thead>\n        <tbody>\n          ${rows.map(makeRow).join(\"\")}\n        </tbody>\n      </table>\n    </td>\n  </tr>\n</table>\n`;\n\nreturn [{ json: { html: table } }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1040,
+        352
+      ],
+      "id": "fdb4a417-f452-4f1a-96a7-70267f767160",
+      "name": "Build Markdown",
+      "alwaysOutputData": false
+    },
+    {
+      "parameters": {
+        "mode": "markdownToHtml",
+        "markdown": "={{$json[\"html\"]}}",
+        "destinationKey": "HTML",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.markdown",
+      "typeVersion": 1,
+      "position": [
+        1232,
+        368
+      ],
+      "id": "79509937-a29f-401c-af90-03901cfc3faa",
+      "name": "Markdown"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Read TITAN_Errors (Google Sheets)1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read TITAN_Errors (Google Sheets)1": {
+      "main": [
+        [
+          {
+            "node": "Stash1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Error_Map (Google Sheets)1": {
+      "main": [
+        [
+          {
+            "node": "Map SimplifierError1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Outstanding2": {
+      "main": [
+        [
+          {
+            "node": "Group & Build Rows2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Map SimplifierError1": {
+      "main": [
+        [
+          {
+            "node": "Filter Outstanding2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Group & Build Rows2": {
+      "main": [
+        [
+          {
+            "node": "Build Markdown",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Stash1": {
+      "main": [
+        [
+          {
+            "node": "Read Error_Map (Google Sheets)1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Markdown": {
+      "main": [
+        [
+          {
+            "node": "Markdown",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Markdown": {
+      "main": [
+        [
+          {
+            "node": "Send Email (Outlook 365)1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "a3d210f5-013a-46ab-91fb-ceb44a2f4129",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "8ffcb0b6a5f8b03614cf8189f96c71402d17071429ce9e112a6330c92667cabb"
+  },
+  "id": "yDE8Dh4rdqDuT99G",
+  "tags": []
+}
